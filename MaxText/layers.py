@@ -35,6 +35,7 @@ from flax import linen as nn
 from flax.linen import partitioning as nn_partitioning
 
 import numpy as np
+from einops import rearrange, repeat
 
 import jax
 from jax import lax
@@ -302,7 +303,22 @@ def _convert_to_activation_function(
   else:
     raise ValueError(f"""Don't know how to convert {fn_or_string}
                          to an activation function""")
+def rotate_every_two(x):
+    x1 = x[:, :, :, 0::2]
+    x2 = x[:, :, :, 1::2]
 
+    x = jnp.stack((-x2, x1), axis=-1)
+    return rearrange(x, '... d j -> ... (d j)')
+
+def apply_rotary_pos_emb(x, sincos):
+    sin, cos = map(lambda t: repeat(t, '... b n -> ... b (n j)', j=2)[-x.shape[-3]:, None, :], sincos)
+    return (x * cos) + (rotate_every_two(x) * sin)
+
+def fixed_pos_embedding(x, seq_dim=0):
+    dim = x.shape[-1]
+    inv_freq = 1. / (10000 ** (np.arange(0, dim, 2) / dim))
+    sinusoid_inp = np.einsum('i , j -> i j', np.arange(x.shape[seq_dim]), inv_freq)
+    return np.sin(sinusoid_inp), np.cos(sinusoid_inp)
 
 class MultiHeadDotProductAttention(nn.Module):
   """Multi-head dot-product attention.
@@ -440,6 +456,10 @@ class MultiHeadDotProductAttention(nn.Module):
     query = projection(kernel_init=query_init, name='query')(inputs_q)
     key = projection(kernel_init=self.kernel_init, name='key')(inputs_kv)
     value = projection(kernel_init=self.kernel_init, name='value')(inputs_kv)
+
+    sincos = fixed_pos_embedding(key, seq_dim=1)
+    query = apply_rotary_pos_emb(query, sincos)
+    key = apply_rotary_pos_emb(key, sincos)
 
     query = nn.with_logical_constraint(
         query, ('activation_batch', 'activation_length', 'activation_heads', 'activation_kv')
@@ -1059,16 +1079,6 @@ class DecoderLayer(nn.Module):
                max_decode_length):
     cfg = self.config
     mesh = self.mesh
-    # Relative position embedding as attention biases.
-    l = max_decode_length if decode and max_decode_length else inputs.shape[-2]
-    decoder_bias = RelativePositionBiases(
-        num_buckets=32,
-        max_distance=128,
-        num_heads=cfg.num_heads,
-        dtype=cfg.dtype,
-        embedding_init=nn.initializers.variance_scaling(1.0, 'fan_avg',
-                                                        'uniform'),
-        name='relpos_bias')(l, l, False)
 
     inputs = nn.with_logical_constraint(inputs, ('activation_batch', 'activation_length', 'activation_embed'))
 
@@ -1090,7 +1100,7 @@ class DecoderLayer(nn.Module):
             lnx,
             lnx,
             decoder_mask,
-            decoder_bias,
+            bias=None,
             deterministic=deterministic,
             decode=decode)
     attention_lnx = nn.with_logical_constraint(attention_lnx, ('activation_batch', 'activation_length', 'activation_embed'))
@@ -1103,14 +1113,12 @@ class DecoderLayer(nn.Module):
         dtype=cfg.dtype,
         name='mlp',
         config=cfg,
-    )(lnx, deterministic=deterministic)
+    )(lnx + attention_lnx, deterministic=deterministic)
     mlp_lnx = nn.with_logical_constraint(mlp_lnx, ('activation_batch', 'activation_length', 'activation_embed'))
-
-    next_layer_addition = mlp_lnx + attention_lnx
 
     next_layer_addition_dropped_out = nn.Dropout(
         rate=cfg.dropout_rate, broadcast_dims=(-2,))(
-            next_layer_addition, deterministic=deterministic)
+            mlp_lnx, deterministic=deterministic)
 
     layer_output = next_layer_addition_dropped_out + inputs
     layer_output = nn.with_logical_constraint(layer_output, ('activation_batch', 'activation_length', 'activation_embed'))
@@ -1205,9 +1213,6 @@ class Decoder(nn.Module):
                 max_decode_length)
 
     y = LayerNorm(dtype=cfg.dtype, name='decoder_norm', kernel_axes = ('embed',))(y)
-    y = nn.Dropout(
-        rate=cfg.dropout_rate, broadcast_dims=(-2,))(
-            y, deterministic=deterministic)
 
     # [batch, length, emb_dim] -> [batch, length, vocab_size]
     if cfg.logits_via_embedding:
