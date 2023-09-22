@@ -58,15 +58,15 @@ aqt_rng_type: "jax.uniform"
 # Global parameter scale needs to be a power of 2. If you want finer grained control of the model sizes 
 # then you should explicitly set base_embed_dim, base_num_heads, base_mlp_dim, base_num_decoder_layers and/or head_dim.
 global_parameter_scale: 1
-base_emb_dim: 2560
-base_num_heads: 8
-base_mlp_dim: 8192
-base_num_decoder_layers: 16
-head_dim: 256
+base_emb_dim: 8192
+base_num_heads: 64
+base_mlp_dim: 32768
+base_num_decoder_layers: 80
+head_dim: 128
 # activation functions are .
-mlp_activations: ["relu"]
+mlp_activations: ['silu', 'linear']
 dropout_rate: 0
-logits_via_embedding: True  # NOTE: this is True just for testing.
+logits_via_embedding: False  # NOTE: this is True just for testing.
 # proj, minimal, full, or none
 remat_policy: 'full'
 scan_layers: True
