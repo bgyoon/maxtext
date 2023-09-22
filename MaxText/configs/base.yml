@@ -60,7 +60,7 @@ aqt_rng_type: "jax.uniform"
 global_parameter_scale: 1
 base_emb_dim: 8192
 base_num_heads: 64
-base_mlp_dim: 32768
+base_mlp_dim: 22016
 base_num_decoder_layers: 80
 head_dim: 128
 # activation functions are .
