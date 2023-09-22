@@ -350,9 +350,9 @@ class MultiHeadDotProductAttention(nn.Module):
     """
     if enable_flash_attention:
       # reshaped to ('batch', 'heads', 'length', 'kv')
-      query = jax.numpy.transpose(query, axes = (0,2,1,3))
-      key = jax.numpy.transpose(key, axes = (0,2,1,3))
-      value = jax.numpy.transpose(value, axes = (0,2,1,3))
+      query = jax.numpy.transpose(query, axes = (0,2,1,3)).astype(jnp.float32)
+      key = jax.numpy.transpose(key, axes = (0,2,1,3)).astype(jnp.float32)
+      value = jax.numpy.transpose(value, axes = (0,2,1,3)).astype(jnp.float32)
       @functools.partial(shard_map, mesh = self.mesh, in_specs = (
           P(('data','fsdp'),'tensor'),
           P(('data','fsdp'),'tensor'),
